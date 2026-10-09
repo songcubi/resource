@@ -1,5 +1,11 @@
 name: Deploy icon gallery to GitHub Pages
 
+# 前置条件（只需设置一次）：
+#   Settings → Pages → Build and deployment → Source = GitHub Actions
+# 若 Source 是 "Deploy from a branch"，本工作流会在 configure-pages 步骤失败并报
+# "Get Pages site failed. Please verify that the repository has Pages enabled and
+#  configured to build using GitHub Actions"。
+
 on:
   push:
     branches: [main]
@@ -15,28 +21,67 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate icons.json manifest
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Regenerate icons.json from icons/
         run: node build-manifest.js
 
       - name: Stamp build time into the page
         run: |
           STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
           sed -i "s|__BUILD_STAMP__|${STAMP}|g" index.html
-          grep -q "构建时间" index.html && echo "stamp ok" || echo "no stamp placeholder (fine)"
+          echo "stamped: ${STAMP}"
+
+      - name: Validate output before deploying
+        run: |
+          set -e
+          test -f index.html        || { echo "::error::缺少 index.html"; exit 1; }
+          test -f icons/icons.json  || { echo "::error::缺少 icons/icons.json"; exit 1; }
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync("icons/icons.json", "utf8"));
+            if (!Array.isArray(m.files)) { console.error("::error::icons.json 缺少 files 数组"); process.exit(1); }
+            console.log("清单包含 " + m.files.length + " 个图标，共 " + (m.totalSize/1024).toFixed(1) + " KB");
+            if (m.files.length === 0) console.log("::warning::icons/ 目录下没有图标，页面会显示空列表");
+            for (const f of m.files) {
+              if (!fs.existsSync(f.path)) { console.error("::error::清单引用了不存在的文件: " + f.path); process.exit(1); }
+            }
+          '
+
+      - name: Stage deployable files only
+        run: |
+          set -e
+          rm -rf _site
+          mkdir -p _site
+          cp index.html _site/
+          cp -r icons _site/
+          [ -f .nojekyll ] && cp .nojekyll _site/ || true
+          echo "::group::发布内容"
+          find _site -type f | sort
+          echo "::endgroup::"
+          test -f _site/index.html     || { echo "::error::_site 缺少 index.html"; exit 1; }
+          test -f _site/icons/icons.json || { echo "::error::_site 缺少 icons/icons.json"; exit 1; }
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4

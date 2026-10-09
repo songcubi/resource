@@ -1,90 +1,93 @@
-# 图标库 · GitHub + jsDelivr + GitHub Pages
+# 图标库 · GitHub + jsDelivr + GitHub Pages（Actions 部署）
 
-图标存在 GitHub 仓库 → jsDelivr 提供 CDN 加速链接 → GitHub Pages 托管一个总览页，**实时列出所有图标，点一下复制各种格式的引用链接**。
+图标存在 GitHub 仓库 → jsDelivr 提供 CDN 加速链接 → GitHub Pages 托管总览页，**实时列出所有图标，点一下复制各种格式的引用链接**。
 
-**本版本的关键改进：列目录不再依赖 GitHub API。** 早期版本打开页面要调 `api.github.com` 列目录，而国内出口 IP 极易撞上"未登录每小时 60 次"的 403 限流（这是实测踩到的真实故障）。现在改为读取仓库内的清单文件 `icons/icons.json`，页面**完全不访问 GitHub API**，只依赖静态文件。
+两个关键设计决定：
+
+1. **列目录不依赖 GitHub API**：改为读取仓库内的清单文件 `icons/icons.json`。早期版本靠 `api.github.com` 列目录，国内出口 IP 极易撞上"未登录每小时 60 次"的 403 限流（实测踩到的真实故障）。现在页面**完全不访问 GitHub API**。
+2. **只用 GitHub Actions 部署**：`Settings → Pages → Source` 必须是 **GitHub Actions**，由工作流每次 push 自动重新生成清单并发布。
 
 ```
 icon-cdn/
 ├── index.html                    # 总览页（零依赖单文件）
 ├── build-manifest.js             # 生成 icons/icons.json 清单
 ├── icons/
-│   ├── icons.json                # ← 清单文件（由脚本生成，需提交）
+│   ├── icons.json                # ← 清单文件（数据源，Actions 会自动重建）
 │   ├── bookmark.svg  logo.svg  note.png  search.svg  settings.svg  star.svg
+│   ├── TokenStar.png  TokenStar_light.png
+│   ├── TokenStar_background.jpeg  TokenStar_Transparent_background.png
 │   └── ui/folder.svg
-├── .github/workflows/pages.yml   # push 时自动生成清单 + 部署 Pages
+├── .github/workflows/pages.yml   # 生成清单 → 校验 → 部署 Pages
 └── .nojekyll  .gitignore
 ```
 
 ---
 
-## 一、部署五步（按顺序做，别跳）
+## 一、部署四步
 
-### 1. 上传文件到仓库
+### 1. 把 Pages 的 Source 切成 GitHub Actions（关键，先做）
 
-把 `index.html`、`build-manifest.js`、`.github/`、以及你的 `icons/` 一起 push。
+`Settings → Pages → Build and deployment → Source` 选 **GitHub Actions**。
 
-### 2. 生成清单文件
+> ⚠️ 这是最常见的失败点。若 Source 仍是 "Deploy from a branch"，工作流会在 `configure-pages` 步骤报：
+> `Get Pages site failed. Please verify that the repository has Pages enabled and configured to build using GitHub Actions`
+> 报错与代码无关，纯粹是模式不匹配。
+
+### 2. 上传文件
+
+需要上传到仓库根目录：
+
+```
+index.html
+build-manifest.js
+.github/workflows/pages.yml
+icons/            （你的图标 + icons.json）
+.nojekyll
+.gitignore
+```
+
+### 3. 本地生成一次清单（可选但推荐）
 
 ```powershell
-cd <项目目录>
-node build-manifest.js
-git add icons/icons.json build-manifest.js index.html
-git commit -m "feat: 清单文件 + 免 API 的图标库"
+node build-manifest.js          # 生成 icons/icons.json
+```
+
+Actions 每次部署都会在服务器上重新生成它，所以**不是必须**；本地跑一次的好处是可以提前校验、并让 `file://` 直接打开页面时也有列表。
+
+### 4. 提交并推送
+
+```powershell
+git add -A
+git commit -m "feat: Actions 部署的图标库"
 git push
 ```
 
-`icons/icons.json` **必须提交到仓库**——它就是页面的数据源。以后每新增/删除图标，重跑一次这个命令再 push。
-
-### 3. 开启 Pages（两种模式，选一种并保持一致）
-
-| | 方式 A：分支部署 | 方式 B：Actions 部署（推荐） |
-|---|---|---|
-| 设置 | `Settings → Pages → Source` = **Deploy from a branch**，选 `main` / `(root)` | `Settings → Pages → Source` = **GitHub Actions** |
-| 清单更新 | 你本地跑 `build-manifest.js` 后 push | 每次 push 由 Actions **自动**重新生成 |
-| 构建时间 | 显示 `__BUILD_STAMP__` 占位符 | 显示真实构建时间 |
-
-> ⚠️ **最容易踩的坑**：如果 Source 选的是"分支"，但仓库里存在 `.github/workflows/pages.yml`，Actions 会运行并在 `configure-pages` 步骤失败，报错是
-> `Get Pages site failed. Please verify that the repository has Pages enabled and configured to build using GitHub Actions`。
-> 这不是代码问题，是模式不匹配：**要用 Actions 工作流，就必须把 Source 切成 GitHub Actions**；不想切成 Actions，就把 `.github/workflows/pages.yml` 删掉，只用方式 A。
-
-### 4. 打开页面确认
-
-访问 `https://<用户名>.github.io/<仓库名>/`，正常应看到：
-
-```
-已读取 N 个图片文件 · 数据源：同目录清单（不依赖 GitHub API） · 时间
-```
-
-顶部工具栏会显示绿色 `● 清单文件（推荐）`。若显示黄色的 `● GitHub API 兜底`，说明清单没读到，见排查表。
-
-### 5. 改配置（如果 `index.html` 里的 DEFAULTS 不是你的仓库）
-
-展开「⚙️ 仓库配置」填写，或直接改 `index.html` 里的 `DEFAULTS`：
-
-```js
-var DEFAULTS = {
-  owner:  'songcubi',                           // GitHub 用户名
-  repo:   'resource',                           // 仓库名
-  branch: 'main',
-  path:   'icons',                              // 图标目录（清单文件在此目录内）
-  cdn:    'https://cdn.jsdelivr.net/gh/{owner}/{repo}@{ref}',
-  pages:  'https://songcubi.github.io/resource' // ← Pages 站点地址
-};
-```
-
-> ⚠️ `pages` 必须填 **Pages 站点地址**（`https://用户名.github.io/仓库名`），**不是**仓库网页地址（`https://github.com/用户名/仓库名`）。填错会让「Pages」按钮生成打不开的链接。
+推送后到 `Actions` 标签页看 `Deploy icon gallery to GitHub Pages` 是否全绿，然后访问 `https://<用户名>.github.io/<仓库名>/`。
 
 ---
 
-## 二、日常使用
+## 二、工作流做了什么
+
+| 步骤 | 作用 |
+|---|---|
+| `actions/checkout@v4` | 拉取仓库 |
+| `node build-manifest.js` | **扫描 `icons/` 重新生成清单**，新图标自动进列表 |
+| Stamp build time | 把 `__BUILD_STAMP__` 替换成真实 UTC 时间 |
+| Validate output | 断言 `index.html` / `icons/icons.json` 存在、`files` 是数组、清单里每个路径都真实存在；有一项不满足就**中止部署**（避免把坏页面发上线） |
+| Stage `_site/` | 只挑发布需要的文件（`index.html` + `icons/` + `.nojekyll`），避免把 `.git`、测试脚本一起发到线上 |
+| `upload-pages-artifact` + `deploy-pages` | 发布 |
+
+> Actions 会跑在 Ubuntu 上，本机不需要装任何东西（用仓库自带 Node 20）。
+
+---
+
+## 三、日常使用
 
 1. 把新图标放进 `icons/`（支持子目录）
-2. `node build-manifest.js`
-3. `git commit && git push`
-4. 刷新总览页
+2. `git add -A && git commit -m "add icons" && git push`
+3. 等 Actions 变绿，刷新总览页
 
-> 方式 B（Actions）下第 2 步是自动的，但**清单文件必须已被提交过一次**，否则首次部署时仓库里没有它。
+> 走 Actions 时**不需要**本地跑 `build-manifest.js`——工作流会在服务器上重建。本地跑只是为了离线预览和提前校验。
 
 ### 每个图标可复制 5 种链接
 
@@ -96,7 +99,7 @@ var DEFAULTS = {
 | Pages | `https://user.github.io/repo/icons/logo.svg` |
 | CSS | `background-image:url("https://…");` |
 
-顶部还有「⧉ 复制全部链接」（按当前过滤导出 Markdown）和「↓ 导出 JSON」。
+顶部还有「⧉ 复制全部链接」（导出当前过滤结果的 Markdown）和「↓ 导出 JSON」。
 
 ### 链接怎么选
 
@@ -106,56 +109,60 @@ var DEFAULTS = {
 | 正式发版 | `…@v1.0.0/…` | 打 tag 后引用，**永久缓存**，不受后续改动影响 |
 | 兜底 | `raw.githubusercontent.com/…` | 无 CDN，慢但稳；配置面板可切换 |
 
-发布稳定版本：
-
 ```powershell
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-然后把配置里的「分支 / 标签」改成 `v1.0.0`，即可生成 `@v1.0.0` 链接。
+打完后把配置里的「分支 / 标签」改成 `v1.0.0`，即可生成 `@v1.0.0` 链接。
 
 ---
 
-## 三、数据源与降级顺序
+## 四、⚠️ 图片体积（当前最大问题）
 
-页面按以下顺序找数据，**前一步成功就完全不走 GitHub API**：
+`icons/` 里几张真实素材偏大，**引用它们的页面每次都要下载这些体积**：
 
-| 顺序 | 数据源 | 稳定性 |
-|---|---|---|
-| 1 | 同目录清单 `icons/icons.json`（Pages / 本地同源） | ✅ 最稳，推荐 |
-| 2 | Pages 站点上的清单 | ✅ |
-| 3 | jsDelivr 上的清单 | ⚠️ 有 12 小时缓存，新图标可能不立刻出现 |
-| 4 | GitHub API 列目录 | ⚠️ 未登录 60 次/小时，国内易 403 |
-| 5 | 手动清单模式 | ✅ 完全离线可用（配置面板里粘贴路径） |
+| 文件 | 像素 | 大小 | 判断 |
+|---|---|---|---|
+| `TokenStar_background.jpeg` | 2752×928 | 2.27 MB | 仅适合当背景图，不适合直接引用 |
+| `TokenStar_light.png` | 2752×928 | 1.43 MB | 同上 |
+| `TokenStar.png` | 1536×1536 | 1.13 MB | Logo 场景过大，512px 足够 |
+| `TokenStar_Transparent_background.png` | 1536×1536 | 939.9 KB | 同上 |
+| 其余 7 个 svg / 小 png | ≤ 32px | 共 ~3 KB | 正常 |
 
-第 4 步只为兼容"没生成清单"的仓库而保留；工具栏会黄色提示你尽快执行 `node build-manifest.js`。
+合计约 **5.74 MB**。CDN 能扛，但图标/Logo 的正确形态应该是**几十 KB**。建议：
+
+- **Logo / 图标**：缩到 256–512px，PNG 用 8 位调色板或转 WebP，通常能降到 20–60 KB（约 95% 降幅）
+- **背景 / Banner**：保留较大尺寸但转 WebP（质量 80），通常降到 100–300 KB
+- 需要多种尺寸时，用文件名区分（`logo-64.webp` / `logo-512.webp`），页面会把它们都列出来
+
+没有图形工具的话，可以用 Node + `sharp`，或告诉我，我可以直接生成压缩后的文件。
 
 ---
 
-## 四、排查表
+## 五、排查表
 
 | 现象 | 原因与处理 |
 |---|---|
-| Actions 在 `configure-pages` 失败：`Get Pages site failed` | Pages 的 Source 不是 GitHub Actions。改成 GitHub Actions 后 Re-run；或删掉 workflow 改用分支部署（见第一步第 3 节） |
-| 红条 `读取失败 … 已尝试：同目录清单 → HTTP 404` | 仓库里没有 `icons/icons.json`。跑 `node build-manifest.js` 并 push |
-| 黄条 `● GitHub API 兜底` | 清单没读到，正在用 API。检查清单路径是否与配置的目录一致 |
-| 403 / 429 | GitHub API 限流。生成清单文件即可彻底绕开；或配置访问令牌 |
-| 页面显示"还没配置你自己的仓库" | `index.html` 的 `DEFAULTS` 还是 `your-name/icons`，改掉或保存配置 |
-| 「Pages」按钮的链接打不开 | `pages` 填成了仓库网页地址，应填 `https://用户名.github.io/仓库名` |
+| Actions 在 `configure-pages` 失败：`Get Pages site failed` | Pages 的 Source 不是 GitHub Actions，见第一步 |
+| Actions 在 `Validate output` 失败 | 清单缺失或少图标，按日志里的 `::error::` 提示处理 |
+| 红条 `读取失败 … 已尝试：同目录清单 → HTTP 404` | 仓库里没有 `icons/icons.json`，跑 `node build-manifest.js` 并 push |
+| 黄条 `● GitHub API 兜底` | 清单没读到，正在用 API。确认图标目录与配置一致 |
+| 403 / 429 | GitHub API 限流。清单存在时根本不会触发；否则配置访问令牌 |
+| 「Pages」按钮链接打不开 | 配置里的 `pages` 填成了仓库网页地址，应填 `https://用户名.github.io/仓库名` |
 | 换了同名图标但引用处没变 | jsDelivr 的 `@分支` 缓存（约 12 小时）。改用 `@v1.0.0` 标签 |
-| 图标能显示但列表为空 | 清单为空或格式不对；确认 `icons.json` 里 `files` 数组非空 |
-| 私有仓库 | jsDelivr 读不到私有仓库。此方案仅适用于公开仓库 |
+| 大图加载慢 | 见第四节，先压缩 |
+| 私有仓库 | jsDelivr 读不到私有仓库，本方案仅适用于公开仓库 |
 
 ---
 
-## 五、本地自检（可选）
+## 六、本地自检（可选）
 
 ```powershell
 node test-server.js      # http://127.0.0.1:8765/
 ```
 
-`test-server.js` 是**仅供本机验证**的 mock 服务（模拟 GitHub API + 托管静态文件 + 本地图片），不参与线上部署，可以直接删。
+仅供本机验证的 mock 服务（模拟 GitHub API + 托管静态文件），不参与线上部署，可直接删。
 
 | 钩子 | 作用 |
 |---|---|
@@ -164,25 +171,27 @@ node test-server.js      # http://127.0.0.1:8765/
 
 ---
 
-## 六、验证记录
+## 七、验证记录
 
-> 交付前本机实测（Chromium + mock，2026-10-09）。"API 挂掉"场景全程返回 503。
+> 交付前本机实测（Chromium + mock，2026-10-09）。"API 挂掉"场景全程返回 403/503。
 
 | # | 验证项 | 结果 |
 |---|---|---|
-| 1 | 内联 JS / 脚本语法（`node --check`） | ✅ 通过 |
-| 2 | **API 全程 503，仅靠清单渲染** | ✅ 7 个图标全部显示，**API 调用次数 = 0** |
-| 3 | 清单候选降级链 | ✅ 前两个 404 → 自动落到可用候选 → 成功 |
-| 4 | 递归子目录 | ✅ `icons/ui/folder.svg` 正常列出 |
-| 5 | 复制 CDN / Markdown / 全部 | ✅ 回读剪贴板逐一比对一致 |
-| 6 | Pages 链接生成 | ✅ `https://songcubi.github.io/resource/icons/bookmark.svg` |
-| 7 | 搜索过滤 + `Esc` | ✅ 命中数与恢复均正确 |
-| 8 | 导出 JSON | ✅ 下载 `icon-manifest.json` |
-| 9 | 预览失败兜底 | ✅ 显示"预览加载失败 + 文件名" |
-| 10 | 无清单 + 无 API | ✅ 明确提示生成 `icons.json`，并提供手动清单入口 |
-| 11 | 清单自排除 | ✅ 连续两次生成 count 稳定为 7，不会把 `icons.json` 算进去 |
-| 12 | `file://` 本地打开并复制 | ✅ 剪贴板被真实覆盖 |
-| 13 | 窄屏 375px | ✅ 无横向溢出 |
-| 14 | 真实仓库核验 | ✅ GitHub API 确认 `songcubi/resource` 的 `icons/` 内容；jsDelivr 返回真实 SVG；Pages 站点 200 |
+| 1 | 全部脚本语法（`node --check`） | ✅ 通过 |
+| 2 | **API 全程 403，仅靠清单渲染** | ✅ 11 个图标全部列出，**API 调用次数 = 0** |
+| 3 | 11 张图真实加载 | ✅ `naturalWidth` 全部 > 0，无破图 |
+| 4 | 清单候选降级链 | ✅ 前两个 404 → 自动落到可用候选 → 成功 |
+| 5 | 大文件复制链接 | ✅ 复制出 `…@main/icons/TokenStar_background.jpeg` |
+| 6 | 递归子目录 | ✅ `icons/ui/folder.svg` 正常列出 |
+| 7 | 复制 CDN / Markdown / 全部 | ✅ 回读剪贴板逐一比对一致 |
+| 8 | Pages 链接生成 | ✅ `https://songcubi.github.io/resource/icons/bookmark.svg` |
+| 9 | 搜索过滤 + `Esc` | ✅ 命中数与恢复均正确 |
+| 10 | 导出 JSON | ✅ 下载 `icon-manifest.json` |
+| 11 | 无清单 + 无 API | ✅ 提示生成 `icons.json`，并提供手动清单入口 |
+| 12 | 清单自排除 | ✅ 连跑两次 count 稳定，不会把 `icons.json` 算进去 |
+| 13 | 工作流 staging + 校验逻辑 | ✅ 本地等价仿真通过；发布内容仅 `index.html` + `icons/` + `.nojekyll` |
+| 14 | 文本文件编码 | ✅ 全 UTF-8 无 BOM，中文无乱码 |
+| 15 | `file://` 本地打开并复制 | ✅ 剪贴板被真实覆盖 |
+| 16 | 窄屏 375px | ✅ 无横向溢出 |
 
 截图在 `shots/`（已 gitignore）。
