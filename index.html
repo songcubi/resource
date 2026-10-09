@@ -240,6 +240,7 @@
         </select>
       </label>
       <span class="count" id="stat">等待加载…</span>
+      <span class="count" id="src-hint" hidden></span>
     </div>
 
     <div style="padding:var(--sp-4) var(--sp-4) 0">
@@ -271,12 +272,12 @@
    * 1. 默认配置：把这里改成你自己的仓库即可
    * =======================================================*/
   var DEFAULTS = {
-    owner:  'songcubi',          // ← GitHub 用户名 / 组织名
-    repo:   'resource',              // ← 仓库名
-    branch: 'main',               // ← 分支或标签（如 v1.0.0）
-    path:   'icons',              // ← 存放图标的目录，根目录留空 ''
+    owner:  'songcubi',                           // ← GitHub 用户名 / 组织名
+    repo:   'resource',                           // ← 仓库名
+    branch: 'main',                               // ← 分支或标签（如 v1.0.0）
+    path:   'icons',                              // ← 存放图标的目录，根目录留空 ''
     cdn:    'https://cdn.jsdelivr.net/gh/{owner}/{repo}@{ref}',
-    pages:  'https://github.com/songcubi/resource'                    // ← 例如 https://your-name.github.io/icons
+    pages:  'https://songcubi.github.io/resource' // ← GitHub Pages 站点地址（不是仓库网页地址！）
   };
 
   var STORE_KEY = 'icon-gallery:config:v1';
@@ -429,14 +430,87 @@
       });
   }
 
-  function fetchFiles() {
+  /* ---------- 清单文件（首选数据源，不依赖 GitHub API） ---------- */
+  // 生成方式：`node build-manifest.js`，或交给 .github/workflows/pages.yml 在每次 push 时自动生成。
+  // 清单随图标放在同一目录：icons/icons.json
+  function manifestPath() {
+    var p = String(cfg.path || '').replace(/^\/+|\/+$/g, '');
+    return p ? p + '/icons.json' : 'icons.json';
+  }
+  function manifestUrl() { return manifestPath(); }
+
+  function parseManifest(data) {
+    var arr = Array.isArray(data) ? data : (data && Array.isArray(data.files) ? data.files : null);
+    if (!arr) throw new Error('icons.json 格式不正确（应为 { files: [...] }）');
+    return arr.map(function (f) {
+      var p = String(f.path || f.name || '').replace(/^\/+/, '');
+      return {
+        name: String(f.name || p.split('/').pop()),
+        path: p,
+        size: Number(f.size) || 0,
+        sha: f.sha || '',
+        html_url: f.html_url || githubUrl(p),
+        download_url: f.download_url || ''
+      };
+    }).filter(function (f) { return f.path; });
+  }
+
+  function manifestCandidates() {
+    var m = manifestUrl();
+    var list = [{ url: m, label: '同目录清单' }];           // Pages / 本地场景，同源最稳
+    var pg = pagesBase();
+    if (pg) list.push({ url: pg + '/' + m, label: 'Pages 清单' });
+    list.push({ url: joinUrl(cdnBase(), m), label: 'jsDelivr 清单' });
+    return list;
+  }
+
+  function fetchManifest() {
+    var list = manifestCandidates();
+    var fail = [];
+    // 顺序尝试；用 no-store + 时间戳绕过浏览器缓存（GitHub Pages 更新即见）
+    return list.reduce(function (chain, c) {
+      return chain.then(function (done) {
+        if (done) return done;
+        var url = c.url + (c.url.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
+        return fetch(url, { cache: 'no-store' }).then(function (res) {
+          if (!res.ok) { fail.push(c.label + ' → HTTP ' + res.status); return null; }
+          return res.json().then(function (data) {
+            var files = parseManifest(data);
+            if (!files.length) { fail.push(c.label + ' → 清单为空'); return null; }
+            files.sort(function (a, b) { return a.path.localeCompare(b.path, 'zh-Hans-CN'); });
+            return { files: files, via: c.label, source: 'manifest' };
+          }).catch(function (e) { fail.push(c.label + ' → ' + e.message); return null; });
+        }).catch(function (e) { fail.push(c.label + ' → ' + (e.message || '网络错误')); return null; });
+      });
+    }, Promise.resolve(null)).then(function (r) {
+      if (r) return r;
+      var err = new Error('未找到 icons.json');
+      err.tried = fail;
+      throw err;
+    });
+  }
+
+  /* ---------- GitHub API 兜底（没有 icons.json 时才用） ---------- */
+  function fetchFilesFromApi() {
     var api = repoApiUrl();
     var out = [];
-    setBanner('warn', '正在读取仓库目录…');
     return listDir(api.contents, 1, out).then(function () {
       out.sort(function (a, b) { return a.path.localeCompare(b.path, 'zh-Hans-CN'); });
-      allFiles = out;
-      return out;
+      return { files: out, via: 'GitHub API 实时读取', source: 'api' };
+    });
+  }
+
+  function fetchFiles() {
+    setBanner('warn', '正在读取图标清单…');
+    return fetchManifest().catch(function (mErr) {
+      return fetchFilesFromApi().catch(function (aErr) {
+        var e = new Error(aErr.message);
+        e.manifestTried = mErr.tried || [];
+        throw e;
+      });
+    }).then(function (r) {
+      allFiles = r.files;
+      return r;
     });
   }
 
@@ -456,6 +530,7 @@
     var list = parseManual();
     if (!list.length) { toast('手动清单为空，请先粘贴文件路径', '', 'err'); return false; }
     allFiles = list;
+    setSrcHint(null);
     setBanner('warn', '<b>手动清单模式</b>（' + esc(reason) + '）· 共 ' + list.length + ' 条。' +
       '此模式下页面不访问 GitHub API，链接与预览仍然可用；添加新图标后请更新清单。');
     renderList(true);
@@ -469,6 +544,19 @@
     b.hidden = false;
     b.className = 'banner ' + kind;
     b.innerHTML = html;
+  }
+
+  /* ---------- 数据源提示：只有当清单文件缺失时才提醒 ---------- */
+  function setSrcHint(source) {
+    var el = $('src-hint');
+    if (!source) { el.hidden = true; el.innerHTML = ''; return; }
+    if (source === 'manifest') {
+      el.hidden = false;
+      el.innerHTML = '<span style="color:var(--ok)">● 清单文件（推荐）</span>';
+    } else {
+      el.hidden = false;
+      el.innerHTML = '<span style="color:var(--warn)">● GitHub API 兜底 · 建议执行 <code>node build-manifest.js</code></span>';
+    }
   }
 
   /* =========================================================
@@ -585,34 +673,39 @@
   function refresh(reset) {
     $('btn-refresh').disabled = true;
     renderCfgSummary();
-    var isDefaultCfg = (cfg.owner === DEFAULTS.owner && cfg.repo === DEFAULTS.repo);
-    if (isDefaultCfg && !cfg.manual) {
+    // 只有"从未保存过自定义配置"才算首次使用；已保存过就不再误报"还没配置"
+    var isFirstRun = !cfg.custom && cfg.owner === DEFAULTS.owner && cfg.repo === DEFAULTS.repo;
+    if (isFirstRun && !cfg.manual) {
       setBanner('warn', '当前是<b>默认演示配置</b>（' + esc(DEFAULTS.owner + '/' + DEFAULTS.repo) + '），还不是你的仓库。' +
         '请展开上方「⚙️ 仓库配置」填入 GitHub 用户名和仓库名后保存。');
     }
-    fetchFiles().then(function (files) {
+    fetchFiles().then(function (r) {
+      var files = r.files;
+      setSrcHint(r.source);
+      var srcNote = r.source === 'manifest'
+        ? '数据源：<b>' + esc(r.via) + '</b>（不依赖 GitHub API）'
+        : '数据源：<b>' + esc(r.via) + '</b>';
       if (!files.length) {
-        setBanner('warn', '目录读取成功，但其中<b>没有图片文件</b>。请把图标放进 <code>' + esc(cfg.path || '(仓库根目录)') + '/</code> 后点「刷新列表」。');
-      } else if (isDefaultCfg) {
-        setBanner('warn', '⚠️ 仍是<b>默认演示配置</b>，但这组示例数据居然读取成功了 —— 请确认上面配置里的用户名/仓库名确实是你的。');
+        setBanner('warn', '清单读取成功，但其中<b>没有图片文件</b>。请把图标放进 <code>' + esc(cfg.path || '(仓库根目录)') + '/</code> 后点「刷新列表」。');
       } else {
-        setBanner('ok', '已从 GitHub 实时读取 <b>' + files.length + '</b> 个图片文件 · ' + new Date().toLocaleTimeString('zh-CN'));
+        setBanner('ok', '已读取 <b>' + files.length + '</b> 个图片文件 · ' + srcNote + ' · ' + new Date().toLocaleTimeString('zh-CN'));
       }
       renderList(reset !== false);
     }).catch(function (err) {
       allFiles = [];
-      if (parseManual().length && useManualList('GitHub API 读取失败：' + err.message)) { return; }
-      if (isDefaultCfg) {
-        setBanner('err', '<b>还没配置你自己的仓库</b>：现在是默认演示配置 <code>' + esc(DEFAULTS.owner + '/' + DEFAULTS.repo) + '</code>。' +
-          '<br>请展开上方「⚙️ 仓库配置」→ 填入 GitHub 用户名、仓库名、图标目录 → 点「保存并刷新」。' +
-          '<br><span style="opacity:.85">（本次 API 返回：' + esc(err.message) + '）</span>');
-        renderList(true);
-        return;
-      }
-      setBanner('err', '读取失败：' + esc(err.message) +
-        '<br>排查顺序：① 用户名/仓库名/分支是否正确 ② 仓库是否公开（私有仓库需在配置里填访问令牌）' +
-        ' ③ 浏览器能否访问 <a href="https://api.github.com" target="_blank" rel="noopener">api.github.com</a>' +
-        '（若被墙，可点这里切换到 <a href="#" id="lnk-manual">手动清单模式</a>，页面依然可用）。');
+      setSrcHint(null);
+      if (parseManual().length && useManualList('读取失败：' + err.message)) { return; }
+      var tried = err.manifestTried && err.manifestTried.length
+        ? '<br><span style="opacity:.85">已尝试：' + esc(err.manifestTried.join('；')) + '</span>'
+        : '';
+      var head = isFirstRun
+        ? '<b>还没配置你自己的仓库</b>：现在是默认演示配置 <code>' + esc(DEFAULTS.owner + '/' + DEFAULTS.repo) + '</code>。' +
+          '<br>请展开上方「⚙️ 仓库配置」→ 填入 GitHub 用户名、仓库名、图标目录 → 点「保存并刷新」。<br>'
+        : '读取失败：';
+      setBanner('err', head + esc(err.message) + tried +
+        '<br>最常见原因：<b>仓库里还没有清单文件 <code>' + esc(manifestPath()) + '</code></b>。' +
+        '请在项目目录执行 <code>node build-manifest.js</code> 生成并推送（或在 Actions 里自动生成），页面即可完全脱离 GitHub API 工作。' +
+        '<br>临时可用：<a href="#" id="lnk-manual">手动清单模式</a>，或为 GitHub API 配置访问令牌。');
       renderList(true);
     }).then(function () {
       $('btn-refresh').disabled = false;

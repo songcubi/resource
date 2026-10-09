@@ -23,6 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generate icons.json manifest
+        run: node build-manifest.js
+
       - name: Stamp build time into the page
         run: |
           STAMP="$(date -u '+%Y-%m-%d %H:%M UTC')"
