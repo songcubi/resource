@@ -56,6 +56,29 @@ const manifest = {
 };
 
 const outPath = path.join(ROOT, OUT);
+const before = fs.existsSync(outPath) ? fs.readFileSync(outPath, 'utf8') : '';
+
+// 供 CI 判断"仓库里的清单是否已过期"（忽略 generatedAt，只看文件列表）
+function fileListOf(text) {
+  try {
+    const o = JSON.parse(text);
+    return JSON.stringify((o.files || []).map((f) => [f.path, f.size]));
+  } catch (e) {
+    return null;
+  }
+}
+
+const nextJson = JSON.stringify(manifest, null, 2) + '\n';
+const changed = fileListOf(before) !== fileListOf(nextJson);
+
+// 列表没变时保留原 generatedAt，避免 CI 每次推送都产生"仅时间戳不同"的提交
+if (!changed && before) {
+  try {
+    manifest.generatedAt = JSON.parse(before).generatedAt || manifest.generatedAt;
+  } catch (e) { /* 旧文件损坏则用新时间 */ }
+}
 fs.writeFileSync(outPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+
 console.log(`[build-manifest] ${OUT}: ${files.length} 个文件，共 ${(manifest.totalSize / 1024).toFixed(1)} KB`);
 if (!files.length) console.warn(`[build-manifest] 警告：${DIR}/ 下没有找到图片文件`);
+console.log(changed ? '[build-manifest] manifest=changed' : '[build-manifest] manifest=unchanged');

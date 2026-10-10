@@ -550,14 +550,10 @@
   /* ---------- 数据源提示：只有当清单文件缺失时才提醒 ---------- */
   function setSrcHint(source) {
     var el = $('src-hint');
-    if (!source) { el.hidden = true; el.innerHTML = ''; return; }
-    if (source === 'manifest') {
-      el.hidden = false;
-      el.innerHTML = '<span style="color:var(--ok)">● 清单文件（推荐）</span>';
-    } else {
-      el.hidden = false;
-      el.innerHTML = '<span style="color:var(--warn)">● GitHub API 兜底 · 建议执行 <code>node build-manifest.js</code></span>';
-    }
+    // 清单是常态，不必常驻提示；只有退化成 API 兜底时才提醒
+    if (source !== 'api') { el.hidden = true; el.innerHTML = ''; return; }
+    el.hidden = false;
+    el.innerHTML = '<span style="color:var(--warn)">● GitHub API 兜底 · 等 Actions 跑完即可</span>';
   }
 
   /* =========================================================
@@ -611,7 +607,7 @@
       var pUrl = pagesUrl(f.path);
       return '<article class="icon">' +
         '<div class="thumb"><img loading="lazy" decoding="async" src="' + esc(preview) + '" alt="' + esc(f.name) + '"' +
-          ' onerror="this.outerHTML=\'<div class=&quot;broken&quot;>预览加载失败<br>' + esc(f.name) + '</div>\'"></div>' +
+          ' onerror="if(!this.dataset.retried){this.dataset.retried=1;this.src=this.src.split(\'?\')[0]+\'?r=\'+Date.now();}else{this.outerHTML=\'<div class=&quot;broken&quot;>预览加载失败<br>' + esc(f.name) + '</div>\';}"></div>' +
         '<div class="meta">' +
           '<div class="name" title="' + esc(f.path) + '">' + esc(f.name) + '</div>' +
           '<div class="path" title="' + esc(f.path) + '">' + esc(f.path) + '</div>' +
